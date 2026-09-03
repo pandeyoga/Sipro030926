@@ -9,7 +9,7 @@ Pemisahan tugas yang dipaksakan di sini:
     sudah dilaporkan.
 Sales & peran lapangan tidak punya akses sama sekali (mutasi rekening = data sensitif).
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 import bank_import as bimp
 import bank_match as bmatch
@@ -29,8 +29,10 @@ def _org(user: dict) -> str:
 # ------------------------------------------------------------------ rekening
 @router.get("/accounts")
 async def list_accounts(user: dict = Depends(require_permission("bank", "view"))):
-    rows = await db.bank_accounts.find({"org_id": _org(user)}, {"_id": 0}) \
-        .sort("name", 1).to_list(100)
+    # Fase 82/83: koleksi `bank_accounts` juga memuat kas (kind=cash); rekonsiliasi bank hanya
+    # untuk rekening bank — kas tidak punya mutasi rekening untuk dibandingkan.
+    rows = await db.bank_accounts.find({"org_id": _org(user), "kind": {"$ne": "cash"}}, {"_id": 0}) \
+        .sort([("is_default", -1), ("name", 1)]).to_list(100)
     return {"data": serialize_doc(rows), "total": len(rows)}
 
 
@@ -190,7 +192,57 @@ async def do_ignore(txn_id: str, payload: BankIgnoreIn,
 
 
 @router.get("/reconciliation")
-async def reconciliation(account_id: str = None,
+async def reconciliation(account_id: str = None, as_of: str = None,
                          user: dict = Depends(require_permission("bank", "view"))):
-    """Saldo buku (GL) vs saldo rekening + selisih + penyebabnya (jujur bila belum diketahui)."""
-    return {"data": serialize_doc(await bmatch.reconciliation(_org(user), account_id))}
+    """Fase 83: saldo rekening vs saldo SUB-AKUN GL rekening itu pada tanggal yang sama; selisih
+    diurai per item (mutasi belum cocok, jurnal tanpa pasangan, saldo awal tersirat, residu)."""
+    import bank_recon as brc
+    org = _org(user)
+    if not account_id:
+        acc = await db.bank_accounts.find_one({"org_id": org, "kind": "bank", "is_default": True},
+                                              {"_id": 0, "id": 1}) \
+            or await db.bank_accounts.find_one({"org_id": org, "kind": "bank"}, {"_id": 0, "id": 1})
+        if not acc:
+            raise HTTPException(status_code=404, detail="Belum ada rekening bank terdaftar.")
+        account_id = acc["id"]
+    try:
+        return {"data": serialize_doc(await brc.reconcile(org, account_id, as_of))}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/reconciliation/overview")
+async def reconciliation_overview(user: dict = Depends(require_permission("bank", "view"))):
+    import bank_recon as brc
+    rows = await brc.overview(_org(user))
+    return {"data": serialize_doc(rows), "total": len(rows),
+            "summary": {s: sum(1 for r in rows if r["status"] == s)
+                        for s in ("seimbang", "dijelaskan", "belum_dijelaskan", "tanpa_data")}}
+
+
+@router.post("/reconciliation/explain")
+async def reconciliation_explain(payload: dict = Body(...),
+                                 user: dict = Depends(require_permission("bank", "update"))):
+    import bank_recon as brc
+    for k in ("account_id", "journal_id", "reason_code"):
+        if not payload.get(k):
+            raise HTTPException(status_code=400, detail=f"Field '{k}' wajib diisi.")
+    try:
+        doc = await brc.explain(_org(user), payload["account_id"], payload["journal_id"],
+                                payload["reason_code"], payload.get("note"), user.get("email"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user, "update", "bank_recon_notes", doc["id"],
+                    {"journal_id": payload["journal_id"], "reason_code": payload["reason_code"]})
+    return {"data": serialize_doc(doc)}
+
+
+@router.post("/reconciliation/unexplain")
+async def reconciliation_unexplain(payload: dict = Body(...),
+                                   user: dict = Depends(require_permission("bank", "update"))):
+    import bank_recon as brc
+    ok = await brc.unexplain(_org(user), payload.get("account_id"), payload.get("journal_id"))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alasan tidak ditemukan.")
+    await audit_log(user, "update", "bank_recon_notes", payload.get("journal_id"), {"removed": True})
+    return {"data": {"removed": True}}

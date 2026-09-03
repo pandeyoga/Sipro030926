@@ -19,6 +19,8 @@ import BankMatchDialog from "@/components/finance/BankMatchDialog";
 import BankAccountDialog from "@/components/finance/BankAccountDialog";
 import BankReasonDialog from "@/components/finance/BankReasonDialog";
 import PaymentIntakePanel from "@/components/finance/PaymentIntakePanel";
+import ReconOverviewTable from "@/components/finance/ReconOverviewTable";
+import ReconDifferencesPanel from "@/components/finance/ReconDifferencesPanel";
 import useListQuery from "@/hooks/useListQuery";
 import { useAuth } from "@/context/AuthContext";
 import { useReference } from "@/context/ReferenceContext";
@@ -56,6 +58,7 @@ export default function BankReconciliationTab() {
   const [accountId, setAccountId] = useState("");
   const [txns, setTxns] = useState(null);
   const [recon, setRecon] = useState(null);
+  const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -78,14 +81,16 @@ export default function BankReconciliationTab() {
     setLoading(true); setError("");
     try {
       const params = { ...apiParams, ...(accountId ? { account_id: accountId } : {}) };
-      const [t, r] = await Promise.all([
+      const [t, r, o] = await Promise.all([
         api.get("/bank/transactions", { params }),
         api.get("/bank/reconciliation", {
           params: accountId ? { account_id: accountId } : {},
         }),
+        api.get("/bank/reconciliation/overview"),
       ]);
       setTxns(t.data);
       setRecon(r.data.data);
+      setOverview(o.data.data);
     } catch (e) {
       setError(e?.response?.data?.detail || "Gagal memuat mutasi rekening.");
     } finally { setLoading(false); }
@@ -198,6 +203,8 @@ export default function BankReconciliationTab() {
 
   return (
     <div data-testid={BANK.panel} className="space-y-5">
+      <ReconOverviewTable rows={overview} selectedId={accountId} onSelect={setAccountId} />
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1.5">
           <Label>Rekening yang direkonsiliasi</Label>
@@ -248,29 +255,18 @@ export default function BankReconciliationTab() {
             ? `Per ${formatDateWIB(recon.statement_balance_at)}`
             : "Berkas mutasi belum memuat kolom saldo"} />
         <KpiCard label="Selisih" icon={ScanSearch}
-          tone={diff ? "rose" : "emerald"}
+          tone={diff ? (recon?.residual ? "rose" : "amber") : "emerald"}
           value={diff === null || diff === undefined
             ? <span className="text-base font-medium text-muted-foreground">belum bisa dihitung</span>
             : <MoneyText value={diff} />}
-          hint={diff ? "Lihat penyebab di bawah" : "Saldo buku sama dengan rekening"} />
+          hint={diff ? (recon?.residual ? "Ada residu tak terjelaskan — lihat uraian" : "Terurai seluruhnya di bawah")
+            : "Saldo buku sama dengan rekening"} />
         <KpiCard label="Belum dicocokkan" icon={Link2} tone="amber"
           value={recon?.unmatched_count ?? 0}
           hint={`Masuk ${recon?.unmatched_in ? "Rp " + Number(recon.unmatched_in).toLocaleString("id-ID") : "0"}`} />
       </div>
 
-      {(recon?.causes || []).length ? (
-        <ul className="space-y-2">
-          {recon.causes.map((c) => (
-            <li key={c.code} data-testid={BANK.reconCause} data-cause={c.code}
-              className={`rounded-lg border px-3 py-2 text-sm ${
-                c.code === "unexplained"
-                  ? "border-rose-200 bg-rose-50 text-rose-800"
-                  : "border-amber-200 bg-amber-50 text-amber-800"}`}>
-              {c.detail}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <ReconDifferencesPanel recon={recon} canExplain={canMatch} onChanged={load} />
 
       <DataTable testId={BANK.table} testIds={{ row: BANK.row, pagination: DT.pagination }}
         columns={columns} rows={txns?.data || []} total={txns?.total || 0}

@@ -34,6 +34,20 @@ export const BANK = {
   ignoreBtn: "bank-ignore-button",
   ignoreReason: "bank-ignore-reason",
   ignoreSubmit: "bank-ignore-submit",
+  // Fase 83 — rekonsiliasi per rekening
+  overviewTable: "bank-recon-overview",
+  overviewRow: "bank-recon-overview-row",
+  reconStatus: "bank-recon-status",
+  reconDiff: "bank-recon-diff",
+  bankOnlyList: "bank-recon-bank-only",
+  bookOnlyList: "bank-recon-book-only",
+  bookOnlyRow: "bank-recon-book-only-row",
+  explainBtn: "bank-recon-explain",
+  explainDialog: "bank-recon-explain-dialog",
+  explainReason: "bank-recon-explain-reason",
+  explainNote: "bank-recon-explain-note",
+  explainSubmit: "bank-recon-explain-submit",
+  unexplainBtn: "bank-recon-unexplain",
 };
 
 export const INTAKE = {

@@ -44,9 +44,20 @@ rekening penerima** / Cr `2-1400`. Entri pencairan di `financing.disbursements[]
 - `backend/tests/test_p82_cash_bank.py` (4): master & default, saldo awal + CSV + duplikat, transfer SoD/posting/saldo/jurnal, kuitansi & jurnal mendarat di rekening pilihan + rekening fiktif ditolak.
 - Gate lama disesuaikan ke sub-akun: `verify_f26_money.py` (`gl_balance` Σ sub-akun), `verify_p27_money.py` (`tb()` agregasi induk), `verify_quotation_labor.py`, `verify_tax_compliance.py`, `test_p76_78_allin_kpr.py`, `test_p78_ui_api.py`; `verify_bank_recon.py` kini memilih kuitansi hasil pencocokan (bukan kuitansi booking fee — bug gate pre-existing).
 
-## 4. Analisis gap Finance & Accounting yang tersisa (backlog terurut)
+## 4. Fase 83 — Rekonsiliasi per rekening (menutup P0 #1)
+- `bank_recon.py`: untuk satu rekening, saldo rekening pada **tanggal mutasi terakhir** dibanding saldo **sub-akun GL rekening itu** pada tanggal yang sama (bukan lagi total `1-1200`). Selisih diurai:
+  - `bank_only` — mutasi rekening `unmatched` ≤ tanggal (belum ada di buku);
+  - `book_only` — baris jurnal sub-akun yang `source_id`-nya tidak muncul di `bank_matches` (belum ada di rekening), tiap item bisa **diberi alasan** (`bank_recon_notes`: setoran dalam perjalanan, cek belum kliring, beda tanggal, biaya bank belum diimpor, salah catat, lainnya+catatan) — dokumentasi saja, angka tidak berubah;
+  - `statement_opening` — saldo rekening tersirat sebelum mutasi pertama (= saldo akhir − Σ mutasi), tanda periode sebelumnya belum diimpor;
+  - `residual` = (rekening + book_only) − (buku + bank_only) − statement_opening → **0 = selisih terurai tuntas**; ≠0 dilaporkan sebagai "residu tak terjelaskan".
+  - Status: `seimbang` / `dijelaskan` / `belum_dijelaskan` / `tanpa_data`.
+- Endpoint: `GET /bank/reconciliation?account_id[&as_of]` (bentuk lama tetap + field baru), `GET /bank/reconciliation/overview` (semua rekening bank + ringkasan status), `POST /bank/reconciliation/explain|unexplain` (`bank:update`). `GET /bank/accounts` kini hanya rekening bank (kas dikecualikan).
+- UI Rekonsiliasi Bank: tabel ikhtisar per rekening (klik = pilih), panel uraian dua keranjang + tombol "Beri alasan", KPI Selisih membedakan "terurai" vs "ada residu".
+- Uji: `tests/test_p83_bank_recon.py` 4/4 (identitas rekonsiliasi, alasan hanya dokumentasi, RBAC), gate `verify_bank_recon.py` PASSED.
+- Catatan jujur: urutan baris dalam satu tanggal di CSV tidak tersimpan, sehingga "saldo akhir" memakai baris terakhir tanggal terakhir berdasarkan urutan impor.
+## 5. Analisis gap Finance & Accounting yang tersisa (backlog terurut)
 **P0 — akuntansi belum utuh**
-1. **Rekonsiliasi bank ↔ sub-akun**: `bank/accounts/{id}/reconciliation` masih membandingkan saldo rekening vs saldo buku total; harus per sub-akun + laporan selisih beralasan (outstanding cheque/deposit in transit) dan *statement closing balance* per periode.
+1. ~~Rekonsiliasi bank ↔ sub-akun~~ — **selesai Fase 83** (lihat §4). Sisa: kunci periode setelah rekonsiliasi dinyatakan seimbang.
 2. **Kas kecil (imprest)**: pengeluaran langsung kas kecil (bukan kas bon) dengan bukti & kategori beban, batas imprest, replenish otomatis mengusulkan `isi_kas_kecil` saat saldo < ambang.
 3. **Tutup periode Kas & Bank**: jurnal ke rekening tidak boleh bertanggal di periode yang sudah direkonsiliasi; kunci saldo awal per bulan.
 4. **Cek/giro mundur (PDC)**: penerimaan giro = akun `1-1300 Giro Belum Cair`, baru jadi bank saat kliring; tolakan giro.
